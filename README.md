@@ -33,6 +33,8 @@ Change parameters in param.json
 * run using unprocessed data from wiki.json. Can change the default parameters directly when calling 
 data.wiki_dataset.WikiDataset.
 `python main.py "wiki" --process_wiki "wiki.json"`    
+This will create files "wiki.csv" and "data\category_counter.pkl", "data\label2index.pkl", the latter two contain 
+information on the processed data.
 * run using costume wikipedia dataset:
   - Install dependencies 
   - create dataset:
