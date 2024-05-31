@@ -1,0 +1,15 @@
+{
+    "l_r": 0.1,
+    "batch_size": 20,
+    "alpha": 0.001,
+    "epochs": 4000,
+    "class_num": 10,
+    "loss_weights": {
+        "reconstruction": 1,
+        "clustering": 100,
+        "contrastive": 0,
+        "triangle": 0,
+        "invariance": 0
+    },
+    "xi": 0.05
+}
