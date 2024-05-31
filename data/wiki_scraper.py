@@ -290,5 +290,5 @@ if __name__ == "__main__":
     countries_dict = {}
     for filename in arguments.file:
         countries_dict.update(get_corpus(multi_label, filename))
-    with open(r"data\food.json", "w") as f:
+    with open(r"data\wiki.json", "w") as f:
         json.dump(countries_dict, f)
