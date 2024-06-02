@@ -11,7 +11,6 @@ from data.mil_datasets import AnimalDataset, MuskDataset
 from data.wiki_dataset import WikiDataset
 import argparse
 
-
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
@@ -102,8 +101,22 @@ def train(model, data_loader, optimizer, criterion, custom_loss, epoch, data, lo
 
 
 def run(args):
-    df = pd.read_csv(os.path.join("data", args.dataset + ".data"), index_col=0, header=None)
-    data_set = MuskDataset(df)
+    if "musk1" in args.dataset:
+        df = pd.read_csv(os.path.join("data", args.dataset + ".data"), index_col=0, header=None)
+        data_set = MuskDataset(df)
+    elif "elephant" in args.dataset or "fox" in args.dataset or "tiger" in args.dataset:
+        df = pd.read_csv(os.path.join("data", args.dataset + ".data"))
+        data_set = AnimalDataset(df)
+    elif "wiki" in args.dataset:
+        if args.process_wiki:
+            data_set = WikiDataset(df="wiki.csv", corp_path=r"data\wiki.json", label_path=r"data\label2index.pkl",
+                                   category_path=r"data\category_counter.pkl")
+        else:
+            df = pd.read_csv("wiki.csv")
+            data_set = WikiDataset(df=df, label_path=r"data\label2index.pkl", category_path=r"data\category_counter.pkl")
+    else:
+        print(f"Must Select Dataset")
+        return
     with open("params.json", "r") as f:
         params = json.load(f)
     # data, model, optimizer and loss setup
@@ -142,7 +155,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', default=20, type=int)
     parser.add_argument('--save_dir', default='results/')
     parser.add_argument('--decay_weights', type=bool, default=False)
-    parser.add_argument('--process_wiki', type=str)
+    parser.add_argument('--process_wiki', type=str, default=None)
     arguments = parser.parse_args()
     print(f"arguments are: {arguments}")
-    # run(arguments)
+    run(arguments)
