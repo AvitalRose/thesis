@@ -5,7 +5,7 @@ import torch
 import numpy as np
 import pickle as pkl
 import matplotlib.pyplot as plt
-
+import json
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -46,7 +46,18 @@ def update_params(args, params_tracker, loss_dict, params):
     return params_tracker
 
 
-def update_kde(kde_tracker, model, train_set):
+def update_kde(kde_tracker, model, train_set, test_set=None):
+    ratio_self, ratio_other = pass_to_kde(model, train_set)
+    kde_tracker["train"]["self"].append(ratio_self)
+    kde_tracker["train"]["other"].append(ratio_other)
+    if test_set is not None:  # so can run without validation
+        ratio_self_test, ratio_other_test = pass_to_kde(model, test_set)
+        kde_tracker["validation"]["self"].append(ratio_self_test)
+        kde_tracker["validation"]["other"].append(ratio_other_test)
+    return kde_tracker
+
+
+def pass_to_kde(model, train_set):
     x_projections = model.encode(torch.cat(train_set.X).to(device).float())[0]
     labels = torch.cat(train_set.label).tolist()
     y = torch.cat(train_set.data[1])
@@ -54,9 +65,7 @@ def update_kde(kde_tracker, model, train_set):
                            index=y.tolist())
     data_df["label"] = labels
     ratio_self, ratio_other = compute_kde(data_df)  # change this for wiki
-    kde_tracker["self"].append(ratio_self)
-    kde_tracker["other"].append(ratio_other)
-    return kde_tracker
+    return ratio_self, ratio_other
 
 
 def compute_kde(df):
@@ -144,7 +153,7 @@ def generic_plot_dict_losses(loss_dict, label, num_plot=4, plot_val=False):
         print(f"len of epochs is: {len(loss_dict[key]['train'])}")
         axs[int(i / row_i), i % col_i].plot(loss_dict[key]["train"], label="training", color=colors[i])
         if plot_val:
-            axs[int(i / row_i), i % col_i].plot(loss_dict[key]["validation"][1:], label="validation", color="black")
+            axs[int(i / row_i), i % col_i].plot(loss_dict[key]["validation"], label="validation", color="black")
         if int(i / row_i) == 1:
             axs[int(i / row_i), i % col_i].set_xlabel("epochs", fontsize=10)
         if i % col_i == 0:
@@ -179,9 +188,18 @@ def generic_plot_dict_losses(loss_dict, label, num_plot=4, plot_val=False):
     plt.clf()
 
 
-def generic_plot_dictionary(dictionary, label):
-    for key, value in dictionary.items():
-        plt.plot(value, label=key)
+def generic_plot_dictionary(dictionary, label, plot_val=False):
+    print(f"dictionary is: {dictionary.keys()}")
+    plt.rcParams["font.family"] = "Times New Roman"
+    colors = [("#a6cee3", "#1f78b4"), ("#b2df8a", "#33a02c"), ("#fb9a99", "#e31a1c"), ("#fdbf6f", "#ff7f00"),
+              ("#cab2d6", "#6a3d9a")]
+    if plot_val:
+        for i, (key, value) in enumerate(dictionary["train"].items()):
+            plt.plot(value, label=key, color=colors[i][0])
+            plt.plot(dictionary["validation"][key], label=key + " val", color=colors[i][1])
+    else:
+        for i, (key, value) in enumerate(dictionary.items()):
+            plt.plot(value, label=key, color=colors[i][0])
     plt.legend()
     plt.title(label)
     plt.xlabel("Epochs")
@@ -192,18 +210,20 @@ def generic_plot_dictionary(dictionary, label):
     plt.clf()
 
 
-def plot_data(run_label, loss_dict, params_tracker, kde_tracker):
+def plot_data(run_label, loss_dict, params_tracker, kde_tracker, validation=False):
     # plot losses
-    generic_plot_dict_losses(loss_dict, run_label, num_plot=6, plot_val=True)
+    generic_plot_dict_losses(loss_dict, run_label, num_plot=6, plot_val=validation)
 
     # plot params
     generic_plot_dictionary(params_tracker, "loss weights " + str(run_label))
 
     # plot kde
-    generic_plot_dictionary(kde_tracker, "kde track " + str(run_label))
+    generic_plot_dictionary(kde_tracker, "kde track " + str(run_label), plot_val=validation)
 
 
-def save_data(run_label, loss_dict, model, data_set, params_tracker, kde_tracker):
+def save_data(run_label, loss_dict, model, data_set, params_tracker, kde_tracker, val_data_set=None):
+    if val_data_set:  # can also run without validation
+        data_set = {"train": data_set, "validation:": val_data_set}
     all_results_dict = {
         "loss_dict": loss_dict,
         "model": model,
@@ -214,4 +234,14 @@ def save_data(run_label, loss_dict, model, data_set, params_tracker, kde_tracker
     # saving pkl file of loss dict
     with open(os.path.join("results", str(run_label) + "results_dict.pickle"), "wb") as output_file:
         pkl.dump(all_results_dict, output_file)
+
+
+def change_params(param_to_change, alpha):
+    print(f"param to change is: {param_to_change} alpha is: {alpha}")
+    with open("params.json", "r") as f:
+        params = json.load(f)
+    params["loss_weights"][param_to_change] = alpha
+    with open("params.json", "w") as f:
+        json.dump(params, f, indent=4)
+
 
