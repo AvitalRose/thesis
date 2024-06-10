@@ -84,6 +84,7 @@ class WikiDataset(MILDataset):
     def preprocess_data(self):
         # clean from labels to include only num_label amount
         # common_labels = [self.index2label[c[1]] for c in self.categories_counter.most_common(self.num_label)]
+        print(f"self.categories_counter: {self.categories_counter}")
         common_labels = [int(c[0]) for c in self.categories_counter.most_common(self.num_label)]
         if self.multi_label:
             self.df["label"] = self.df["label"].apply(lambda x: list(set(x).intersection(common_labels)))
