@@ -44,13 +44,15 @@ class WikiDataset(MILDataset):
     Each bag labels can be a set of labels, which are the categories tags on the bottom of the page for multi label.
     or a single label when not multi-label.
     """
-    def __init__(self, corp_path, df=None,  label_path=None, category_path=None, num_label=50, max_thresh=0.9,
+    def __init__(self, corp_path=None, df=None,  label_path=None, category_path=None, num_label=50, max_thresh=0.9,
                  min_thresh=0.01, embedding=False, multi_label=False, **kwargs):
         self.corp_path = corp_path
         self.max_thresh = max_thresh
         self.min_thresh = min_thresh
         self.num_label = num_label
         self.multi_label = multi_label
+        self.label_path = label_path
+        self.category_path = category_path
 
         if isinstance(df, str):  # if string and not dataframe
             self.df, self.label2index = self.get_dataset()
@@ -69,17 +71,7 @@ class WikiDataset(MILDataset):
                 self.categories_counter = pkl.load(f)
             self.index2label = {idx: label for label, idx in self.label2index.items()}
         super().__init__(self.df, embedding=embedding, multi_label=multi_label)
-
-    def train_test_split(self, ratio=0.8):
-        df_with_labels = self.df.copy()
-        df_with_labels["label"] = torch.cat(self.label)
-        indexes = list(set(df_with_labels.index))
-        random.shuffle(indexes)
-        train_indexes = indexes[:int(len(indexes) * ratio)]
-        val_indexes = indexes[int(len(indexes) * ratio):]
-        train_df = df_with_labels.loc[train_indexes, :]
-        val_df = df_with_labels.loc[val_indexes, :]
-        return train_df, val_df
+        self.vocabulary = list(self.df.columns)  # without label
 
     def preprocess_data(self):
         # clean from labels to include only num_label amount
@@ -177,4 +169,64 @@ class WikiDataset(MILDataset):
                 corpus_dict[cnt] = {"bag": page_name, "label": page_categories, "description": section_content}
                 cnt += 1
         return categories_to_idx, corpus_dict
+
+    def get_test_set(self, json_file_path):
+        with open(json_file_path, "r") as f:
+            pages_dict = json.load(f)
+        corpus_dict = {}
+        cnt = 0
+        for index, (page_name, pages_dict) in enumerate(pages_dict.items()):
+            page_label = self.label2index[pages_dict["categories"][0]] if (pages_dict["categories"][0] in
+                                                                           self.label2index.keys()) else 0
+            # get the description
+            for section_name, section_content in pages_dict["sections"].items():
+                corpus_dict[cnt] = {"bag": page_name, "label": page_label, "description": section_content}
+                cnt += 1
+
+        # clean the data frame:
+        bag_df = pd.DataFrame(corpus_dict).T
+        clean_df = clean_dataframe(bag_df)
+
+        # vectorize words
+        vectorizer = CountVectorizer()  # no min or max threshold, include all words
+        X = vectorizer.fit_transform(clean_df["description"])
+        vocab = vectorizer.get_feature_names_out()
+        docterm = pd.DataFrame(X.todense(), columns=vocab)
+        df_filtered = docterm[docterm.columns.intersection(self.vocabulary)]  # filter words not in train set
+        bag_df = pd.concat([clean_df, df_filtered], axis=1)
+        label_column = bag_df["label"]
+        bag_df = bag_df.drop("description", axis=1)
+        bag_df = bag_df.set_index("bag")
+
+        # Determine columns to add
+        columns_to_add = [col for col in self.df.columns if col not in bag_df.columns]
+
+        # Create new DataFrame with missing columns added to df_b and reorder to match df_a's specific order
+        new_columns = self.df.columns.tolist()
+        bag_df = pd.concat([bag_df, pd.DataFrame(columns=columns_to_add).fillna(0)], axis=1)[new_columns].fillna(0)
+        bag_df = bag_df.reset_index()
+        bag_df.insert(0, "label", label_column)
+        bag_df = bag_df.set_index("bag")
+        # create new dataset instance and return
+        return self.create_instance(bag_df, self.label_path, self.category_path)
+
+    @classmethod
+    def create_instance(cls, value, label_path, category_path):
+        # cls refers to the class
+        return cls(df=value, label_path=label_path, category_path=category_path)
+
+
+if __name__ == "__main__":
+    train_data_set = WikiDataset(df="wiki_0_train.csv",
+                                 corp_path=r"C:\Users\avita\Documents\skl\ThesisProject\data\wiki\wiki2label_train_0.json",
+                                 label_path=r"label2index.pkl",
+                                 category_path=r"category_counter.pkl")  # r"data\wiki.json"
+    test_data_set = train_data_set.get_test_set(
+        r"C:\Users\avita\Documents\skl\ThesisProject\data\wiki\wiki2label_test_0.json")
+    with open("test0.pkl", "wb") as f:
+        pkl.dump(test_data_set, f)
+    with open("train0.pkl", "wb") as f:
+        pkl.dump(train_data_set, f)
+    print(f"test df shape: {test_data_set.df.shape} test df head: {test_data_set.df.head()}")
+
 

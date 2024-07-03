@@ -30,13 +30,38 @@ class MulticolorPatchHandler(object):
         return patch
 
 
-def collect_kde(kde_path=r"C:\Users\avita\Documents\skl\yoram_lab\graphics\kde_plots"):
+def get_kde_ratio_two_labels(result_dict, validation=True):
+    label_0_train = []
+    label_0_val = []
+    label_1_train = []
+    label_1_val = []
+    for epoch_results in result_dict["kde_tracker"]["train"]:
+        label_0_train.append(epoch_results.loc["ratio"].iloc[0])
+        label_1_train.append(epoch_results.loc["ratio"].iloc[1])
+    if validation:
+        for epoch_results in result_dict["kde_tracker"]["validation"]:
+            label_0_val.append(epoch_results.loc["ratio"].iloc[0])
+            label_1_val.append(epoch_results.loc["ratio"].iloc[1])
+        data = {"self": {"train": label_0_train, "validation": label_0_val},
+                "other": {"train": label_1_train, "validation": label_1_val}}
+    else:
+        data = {"self": {"train": label_0_train},
+                "other": {"train": label_1_train}}
+    return data
+
+
+def collect_kde(kde_path=r"C:\Users\avita\Documents\skl\yoram_lab\graphics\kde_plots", two_labels=True, validation=True):
     files_kde = os.listdir(kde_path)
     plots_by_loss = {}
     plots_by_dataset = {}
     for file in files_kde:
         with open(os.path.join(kde_path, file), 'rb') as f:
             data = pkl.load(f)
+        if two_labels:
+            data = get_kde_ratio_two_labels(data, validation=validation)
+        else:
+            print(f"not implemented yet")
+            return
         loss_type = file.split("_")[1].split(" .pkl")[0]
         dataset_type = file.split("_")[0].split(" ")[-1]
         if loss_type not in plots_by_loss:
@@ -46,8 +71,9 @@ def collect_kde(kde_path=r"C:\Users\avita\Documents\skl\yoram_lab\graphics\kde_p
         plots_by_loss[loss_type][dataset_type] = {"0": data["self"], "1": data["other"]}
         plots_by_dataset[dataset_type][loss_type] = {"0": data["self"], "1": data["other"]}
     # plot_kde_box_plot(plots_by_loss)
-    # for key in plots_by_dataset.keys():
-    #     plot_kde_by_dataset(key, plots_by_dataset[key])
+    print(f"plots by dataset: {plots_by_dataset.keys()}, plots by loss: {plots_by_loss.keys()}")
+    for key in plots_by_dataset.keys():
+        plot_kde_by_dataset(key, plots_by_dataset[key], validation=validation)
     return plots_by_loss, plots_by_dataset
 
 
@@ -120,7 +146,9 @@ def plot_kde_box_plot_wiki(loss_dict):
     plt.show()
 
 
-def plot_kde_by_dataset(dict_name, loss_dict):
+def plot_kde_by_dataset(dict_name, loss_dict, validation=True):
+    print(f"loss dict is: {type(loss_dict)}")
+    print(f"keys are: {loss_dict.keys()}")
     plt.rcParams["font.family"] = "Times New Roman"
     fig, ax = plt.subplots()
     # colors = ["r", "g", "b", "m"]
@@ -128,18 +156,24 @@ def plot_kde_by_dataset(dict_name, loss_dict):
     line_styles = ["solid", "dashed"]
     for i, (loss_type, value) in enumerate(loss_dict.items()):
         for j, label_type in enumerate(value.keys()):
-            plt.plot(value[label_type], color=colors[i][int(label_type)], linestyle=line_styles[j], linewidth=1)
+            print(f"type of value is: {type(value[label_type])}")
+            print(f"value keys are: {value[label_type].keys()}")
+            plt.plot(value[label_type]["train"], color=colors[0][int(label_type)], linestyle=line_styles[j], linewidth=1)
+            # plt.plot(value[label_type]["validation"], color=colors[1][int(label_type)], linestyle=line_styles[j], linewidth=1)
+
         # plt.plot([], label=loss_type, color=colors[i])
     # plt.legend()
     # ------ get the legend-entries that are already attached to the axis
     h, l = ax.get_legend_handles_labels()
     # ------ append the multicolor legend patches
-    for i, key in enumerate(loss_dict.keys()):
+    # for i, key in enumerate(loss_dict.keys()):
+    for i, key in enumerate(["train", "validation"]):
         h.append(MulticolorPatch(list(colors[i])))
         l.append(string.capwords(key))
     # ------ create the legend
-    fig.legend(h, l, handler_map={MulticolorPatch: MulticolorPatchHandler()}, loc='right',bbox_to_anchor=[0.9, 0.2])
-    plt.title(f"KDE By Isolate Losses For {string.capwords(dict_name)}")
+    fig.legend(h, l, handler_map={MulticolorPatch: MulticolorPatchHandler()}, loc='right', bbox_to_anchor=[0.9, 0.2])
+    # plt.title(f"KDE By Isolate Losses For {string.capwords(dict_name)}")
+    plt.title(f"KDE By Embedding Only Losses For {string.capwords(dict_name)}")
     plt.xlabel("Epoch")
     plt.ylabel("KDE")
     plt.show()
@@ -265,5 +299,6 @@ if __name__ == "__main__":
     # plots_by_loss = {"rec0": wiki_dictionary, "rec1": wiki_dictionary1}
     # plot_kde_box_plot_wiki(plots_by_loss)
     # bar_plot_kde_wiki(plots_by_loss)
-    plot_loss_for_all_single_losses()
-
+    # plot_loss_for_all_single_losses()
+    # collect_kde(kde_path=r"C:\Users\avita\Documents\skl\ThesisProject\results\results fixed kde\reconstruction")
+    print("gello")

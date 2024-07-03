@@ -188,3 +188,8 @@ class AnimalDataset(MILDataset):
         self.df["label"] = self.df["label"].replace(-1, 0)
         return self.df
 
+
+if __name__ == "__main__":
+    web_path = r"C:\Users\avita\Documents\skl\ThesisProject\data\WEB\web1.csv"
+    # web_path.
+

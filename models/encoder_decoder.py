@@ -188,6 +188,7 @@ class NeuralClusteringModel(nn.Module):
     def empty_cluster_handler(self, data, alpha):
         cnt = 0
         while True:
+            break
             # encode data to clusters
             data_x = torch.cat(data[0])
             z, soft_label, hard_label = self.cluster_data(data)

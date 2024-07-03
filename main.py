@@ -1,10 +1,15 @@
 import json
 import os
+import pickle as pkl
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
 from matplotlib import pyplot as plt
-from utils import compute_kde, plot_data, save_data, print_losses, update_kde, update_params
+from sklearn.model_selection import KFold
+
+from utils import compute_kde, plot_data, save_data, print_losses, update_kde, update_params, change_params, \
+    reset_params
 from models.encoder_decoder import NeuralClusteringModel
 from models.loss_model import CustomDistanceLoss
 from data.mil_datasets import AnimalDataset, MuskDataset
@@ -69,11 +74,31 @@ def train(model, data_loader, optimizer, criterion, custom_loss, epoch, data, lo
         # contrastive loss
         loss_cont, loss_tri, loss_inv = custom_loss(x_, y)
 
+        # if epoch == 0:
+        #     print(f"Epoch is: {epoch}")
         # combine
         loss = (loss_rec * weights["reconstruction"] + loss_cont * weights["contrastive"] +
                 loss_tri * weights["triangle"] + loss_inv * weights["invariance"] +
                 loss_clu_batch * weights["clustering"])
         loss /= sum(weights.values())
+        # else:
+        #     cv_rec = compute_cv(loss_rec)
+        #     cv_cont = compute_cv(loss_cont)
+        #     cv_tri = compute_cv(loss_tri)
+        #     cv_inv = compute_cv(loss_inv)
+        #
+        #     # Normalize CVs to get weights
+        #     total_cv = cv_rec + cv_cont + cv_tri + cv_inv
+        #     weight_rec = cv_rec / total_cv
+        #     weight_cont = cv_cont / total_cv
+        #     weight_tri = cv_tri / total_cv
+        #     weight_inv = cv_inv / total_cv
+        #
+        #     # Compute the weighted sum of losses
+        #     loss = weight_rec * loss_rec + weight_cont * loss_cont + weight_tri * loss_tri + weight_inv * loss_inv
+        #     print(f"cv is: {cv_rec}, cv is: {cv_cont}, cv is: {cv_tri}, cv is: {cv_inv}")
+        #     print(f'weights are: {weight_rec}, {weight_cont}, {weight_tri}, {weight_inv}')
+        #     print(f"loss is: {loss_rec} cont: {loss_cont} tri: {loss_tri} inv: {loss_inv} total: {loss}")
         loss.backward()
         if epoch % 2 == 0:
             model.cluster_layer.weight.grad = (
@@ -100,28 +125,119 @@ def train(model, data_loader, optimizer, criterion, custom_loss, epoch, data, lo
     loss_dict["all"]["train"].append(overall_loss / len(data_loader))
 
 
-def run(args):
+def validate(model, data_loader, criterion, custom_loss, epoch, data, loss_dict, params):
+    weights = params["loss_weights"]
+    loss_clu_epoch = loss_rec_epoch = loss_cont_epoch = loss_tri_epoch = loss_inv_epoch = overall_loss = 0
+    model.eval()
+    with torch.no_grad():
+        for step, (x, y, label) in enumerate(data_loader):
+            x = x.to(device).float()
+            z, embedding = model.encode(x)
+            # cluster and calculate cluster loss and empty cluster handler
+            cluster_batch = model.cluster(z.detach())
+            soft_label = F.softmax(cluster_batch.detach(), dim=1)
+            hard_label = torch.argmax(soft_label, dim=1)
+            delta = torch.zeros((cluster_batch.shape[0], params["class_num"]), requires_grad=False).to(device)
+            for i in range(cluster_batch.shape[0]):  # the batch size
+                delta[i, torch.argmax(soft_label[i, :])] = 1  # to get distance only to chosen center (the max)
+            loss_clu_batch = 2 * params["alpha"] - torch.mul(delta, cluster_batch)
+            loss_clu_batch = 0.01 / params["alpha"] * loss_clu_batch.mean()
+
+            # decode
+            x_ = model.decode(z)
+            # reconstruction decoder loss
+            loss_rec = criterion(x, x_)
+            mean_across_cols = torch.mean(x, -1).unsqueeze(-1).expand(-1, x.shape[-1])
+            loss_from_mean = criterion(x, mean_across_cols)
+            loss_rec /= loss_from_mean  # for normalizing
+
+            # contrastive loss
+            loss_cont, loss_tri, loss_inv = custom_loss(x_, y)
+
+            # combine
+            loss = (loss_rec * weights["reconstruction"] + loss_cont * weights["contrastive"] +
+                    loss_tri * weights["triangle"] + loss_inv * weights["invariance"] +
+                    loss_clu_batch * weights["clustering"])
+            loss /= sum(weights.values())
+
+            # adding to loss list
+            loss_clu_epoch += loss_clu_batch.item()
+            loss_rec_epoch += loss_rec.item()
+            loss_cont_epoch += loss_cont.item()
+            loss_tri_epoch += loss_tri.item()
+            loss_inv_epoch += loss_inv.item()
+            overall_loss += loss.item()
+
+        loss_dict["clustering"]["validation"].append(loss_clu_epoch / len(data_loader))
+        loss_dict["reconstruction"]["validation"].append(loss_rec_epoch / len(data_loader))
+        loss_dict["contrastive"]["validation"].append(loss_cont_epoch / len(data_loader))
+        loss_dict["triangle"]["validation"].append(loss_tri_epoch / len(data_loader))
+        loss_dict["invariance"]["validation"].append(loss_inv_epoch / len(data_loader))
+        loss_dict["all"]["validation"].append(overall_loss / len(data_loader))
+
+
+def compute_cv(losses):
+    mean_loss = torch.mean(losses)
+    std_loss = torch.std(losses)
+    print("Mean loss: ", mean_loss, "std: ", std_loss)
+    if mean_loss == 0:
+        print(f'here" {mean_loss}')
+        return torch.tensor(0.0)
+    return std_loss / mean_loss
+
+
+def run(args, k_fold):
+    # read data
     if "musk1" in args.dataset:
-        df = pd.read_csv(os.path.join("data", args.dataset + ".data"), index_col=0, header=None)
-        data_set = MuskDataset(df)
+        train_df = pd.read_csv(os.path.join("data", arguments.dataset + "_train_" + str(k_fold) + ".data"), index_col=0,
+                               header=None)
+        test_df = pd.read_csv(os.path.join("data", arguments.dataset + "_test_" + str(k_fold) + ".data"), index_col=0,
+                              header=None)
+        train_data_set = MuskDataset(train_df)
+        test_data_set = MuskDataset(test_df)
     elif "elephant" in args.dataset or "fox" in args.dataset or "tiger" in args.dataset:
-        df = pd.read_csv(os.path.join("data", args.dataset + ".data"))
-        data_set = AnimalDataset(df)
+        train_df = pd.read_csv(os.path.join("data", arguments.dataset + "_train_" + str(k_fold) + ".data"), index_col=0)
+        test_df = pd.read_csv(os.path.join("data", arguments.dataset + "_test_" + str(k_fold) + ".data"), index_col=0)
+        train_data_set = AnimalDataset(train_df)
+        test_data_set = AnimalDataset(test_df)
     elif "wiki" in args.dataset:
         if args.process_wiki:
-            data_set = WikiDataset(df="wiki.csv", corp_path=r"data\wiki.json", label_path=r"data\label2index.pkl",
-                                   category_path=r"data\category_counter.pkl")
+            train_data_set = WikiDataset(df="wiki_0_train.csv",
+                                         corp_path=r"C:\Users\avita\Documents\skl\ThesisProject\data\wiki\wiki2label_train_0.json",
+                                         label_path=r"label2index.pkl",
+                                         category_path=r"category_counter.pkl")  # r"data\wiki.json"
+            test_data_set = train_data_set.get_test_set(
+                r"C:\Users\avita\Documents\skl\ThesisProject\data\wiki\wiki2label_test_0.json")
+            print(f"train test shape: {train_data_set.df.shape} and test: {test_data_set.df.shape}")
         else:
-            df = pd.read_csv("wiki.csv")
-            data_set = WikiDataset(df=df, label_path=r"data\label2index.pkl", category_path=r"data\category_counter.pkl")
+            print(f"here: no process")
+            # df = pd.read_csv("data\wiki_small.csv", index_col=0)
+            train_df = pd.read_csv(os.path.join("data", arguments.dataset + "2label_train_" + str(k_fold) + ".data"),
+                                   index_col=0)
+            test_df = pd.read_csv(os.path.join("data", arguments.dataset + "2label_test_" + str(k_fold) + ".data"),
+                                  index_col=0)
+            print(f"train df shape: {train_df.shape} and test df shape: {test_df.shape}\n"
+                  f"train df bags: {len(set(train_df.index))} and test df bags: {len(set(test_df.index))}\n"
+                  f"train df head is: {train_df.head()} test df is: {test_df.head()}")
+            train_data_set = WikiDataset(df=train_df, label_path=r"data\label2index.pkl",
+                                         category_path=r"data\category_counter.pkl")
+            test_data_set = WikiDataset(df=test_df, label_path=r"data\label2index.pkl",
+                                        category_path=r"data\category_counter.pkl")
+            # train_data_set = WikiDataset(df=df, label_path=r"data\label2index.pkl", category_path=r"data\category_counter.pkl")
+            # with open("train_set.pkl", "wb") as f:
+            #     pkl.dump(train_data_set, f)
     else:
         print(f"Must Select Dataset")
         return
+
     with open("params.json", "r") as f:
         params = json.load(f)
     # data, model, optimizer and loss setup
-    all_loader = torch.utils.data.DataLoader(data_set, params["batch_size"], shuffle=True, collate_fn=my_collate)
-    model = NeuralClusteringModel(class_num=params["class_num"], dim=data_set.df.shape[1], df=data_set.df).to(
+    train_loader = torch.utils.data.DataLoader(train_data_set, params["batch_size"], shuffle=True,
+                                               collate_fn=my_collate)
+    val_loader = torch.utils.data.DataLoader(test_data_set, params["batch_size"], shuffle=True, collate_fn=my_collate)
+    model = NeuralClusteringModel(class_num=params["class_num"], dim=train_data_set.df.shape[1],
+                                  df=train_data_set.df).to(
         device)
     optimizer = torch.optim.Adadelta(model.parameters(), lr=params["l_r"])
     custom_loss = CustomDistanceLoss(batch_size=params["batch_size"])
@@ -131,31 +247,91 @@ def run(args):
                  params['loss_weights'].items()}
     loss_dict["all"] = {"train": [], "validation": []}
     params_tracker = {key: [value] for key, value in params["loss_weights"].items()}
-    kde_tracker = {"self": [], "other": []}
+    # kde_tracker = {x: {"self": [], "other": []} for x in ["train", "validation"]}
+    # kde_tracker = {"self": [], "other": []}
+    kde_tracker = {"train": [], "validation": []}
 
     # Run experiment
     for epoch in range(params["epochs"]):
         # before train compute kde
-        kde_tracker = update_kde(kde_tracker, model, data_set)
-        train(model=model, data_loader=all_loader, optimizer=optimizer, criterion=criterion,
-              custom_loss=custom_loss, epoch=epoch, data=data_set.data, loss_dict=loss_dict, params=params)
+        kde_tracker = update_kde(kde_tracker, model, train_data_set, test_data_set)
+        # kde_tracker = update_kde(kde_tracker, model, train_data_set)
+        train(model=model, data_loader=train_loader, optimizer=optimizer, criterion=criterion,
+              custom_loss=custom_loss, epoch=epoch, data=train_data_set.data, loss_dict=loss_dict, params=params)
+        validate(model=model, data_loader=val_loader, criterion=criterion, custom_loss=custom_loss,
+                 epoch=epoch, data=test_data_set.data, loss_dict=loss_dict, params=params)
         print_losses(epoch, params["epochs"], loss_dict)
         # after train change losses and update - maybe not update for last?
         params_tracker = update_params(args, params_tracker, loss_dict, params)
 
-    plot_data(args.run_label, loss_dict, params_tracker, kde_tracker)
-    save_data(args.run_label, loss_dict, model, data_set, params_tracker, kde_tracker)
+    save_data(args.save_dir, args.run_label, loss_dict, model, train_data_set, params_tracker, kde_tracker,
+              test_data_set)  # add test_data_set here if you want to have validation
+    plot_data(args.save_dir, args.run_label, loss_dict, params_tracker, kde_tracker, validation=True)
 
 
 if __name__ == "__main__":
+    print(f"hi")
     parser = argparse.ArgumentParser()
     parser.add_argument('dataset', default='musk1', choices=['musk1', 'elephant', 'fox', 'tiger', 'wiki'])
+    # parser.add_argument('--dataset', default='musk1', type=str)
+
     parser.add_argument("--run_label", type=str, default="musk1")
     parser.add_argument('--n_clusters', default=10, type=int)
     parser.add_argument('--batch_size', default=20, type=int)
-    parser.add_argument('--save_dir', default='results/')
+    parser.add_argument('--save_dir', default='results')
     parser.add_argument('--decay_weights', type=bool, default=False)
     parser.add_argument('--process_wiki', type=str, default=None)
+    parser.add_argument('--fold', type=int, default=None)
     arguments = parser.parse_args()
-    print(f"arguments are: {arguments}")
-    run(arguments)
+    print(f"Arguments: {arguments}")
+    arguments.run_label = str(arguments.dataset) + "_wiki_split_before2label"
+    run(arguments, k_fold=0)
+    # reset_params()  # reset the params
+    # change_params("clustering", 1)  # changing to start experiment
+    # cnt = 1
+    # for fold in range(2, 5):
+    #     for dataset in ['musk1', 'elephant', 'fox', 'tiger']:
+    #         arguments.dataset = dataset
+    #         for param_to_change in ["reconstruction", "contrastive", "triangle", "invariance"]:
+    #             for param_level in reversed([0.1, 1, 10, 100]):  # after add 0.001, 0.1, 1000
+    #                 change_params(param_to_change, param_level)
+    #                 arguments.run_label = (arguments.dataset + "_" + param_to_change + '_level_' +
+    #                                        str(param_level).replace(".", "_") + "_fold_" + str(fold))
+    #                 print(f"cnt is: {cnt}/400 | args is: {arguments.run_label}")
+    #                 run(arguments, fold)
+    #                 change_params(param_to_change, 0)  # change back to zero
+    #                 cnt += 1
+    #
+    #             # Then the param alone
+    #             change_params("clustering", 0)
+    #             change_params(param_to_change, 1)
+    #             arguments.run_label = (arguments.dataset + "_" + param_to_change + "_fold_" + str(fold))
+    #             print(f"cnt is: {cnt}/400 | args is: {arguments.run_label}")
+    #             run(arguments, fold)
+    #             cnt += 1
+    #             change_params("clustering", 1)
+    #             change_params(param_to_change, 0)
+
+    # if "musk1" in arguments.dataset:
+    #         #     df = pd.read_csv(os.path.join("data", arguments.dataset + ".data"), index_col=0, header=None)
+    #         # elif "elephant" in arguments.dataset or "fox" in arguments.dataset or "tiger" in arguments.dataset:
+    #         #     df = pd.read_csv(os.path.join("data", arguments.dataset + ".data"))
+    #         # # split df into 5
+    #         # kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    #         # index_list = np.array(df.index.unique().tolist())
+    #         # for fold, (train_index, test_index) in enumerate(kf.split(range(len(index_list)))):
+    #         #     print(f"cnt is: {cnt}/125 | arguments.run_label is ", arguments.run_label)
+    #         #     train_data = df.loc[index_list[train_index], :]
+    #         #     test_data = df.loc[index_list[test_index], :]
+    #         #     print(f"len of train data is: {train_data.shape} and test data: {test_data.shape}")
+    #         #     print(f"index len: {test_data.shape} index: {test_data.index.unique()}")
+    #         #     train_data.to_csv(os.path.join("data", arguments.dataset + "_train_" + str(fold) + ".data"))
+    #         #     test_data.to_csv(os.path.join("data", arguments.dataset + "_test_" + str(fold) + ".data"))
+    #
+    #             # print(f"arguments are: {arguments}
+
+    #     #        break
+    #     #    break
+    #     # break
+
+
