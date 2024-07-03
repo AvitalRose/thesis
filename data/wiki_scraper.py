@@ -1,4 +1,3 @@
-import wikipediaapi
 import json
 import pickle as pkl
 import os
@@ -279,16 +278,3 @@ def get_corpus(multiple_label, file_path):
             print(f"No title {title}")
     return results_dict
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('file', nargs='+')
-    arguments = parser.parse_args()
-    print(f"arguments are: {arguments}")
-    multi_label = True if len(arguments.file) == 1 else False
-    print(f"multi label is: {multi_label}")
-    countries_dict = {}
-    for filename in arguments.file:
-        countries_dict.update(get_corpus(multi_label, filename))
-    with open(r"data\wiki.json", "w") as f:
-        json.dump(countries_dict, f)
